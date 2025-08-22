@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OAuth Authentication Demo</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .auth-buttons {
+            display: flex;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            text-decoration: none;
+            color: white;
+            font-weight: bold;
+        }
+        .btn-github { background-color: #333; }
+        .btn-facebook { background-color: #4267B2; }
+        .btn-google { background-color: #db4437; }
+        .btn-logout { background-color: #dc3545; }
+        .user-info {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        .status.success { background-color: #d4edda; color: #155724; }
+        .status.error { background-color: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <h1>OAuth 2.0 Authentication Demo</h1>
+    
+    <div id="authSection">
+        <h2>Sign in with:</h2>
+        <div class="auth-buttons">
+            <a href="#" class="btn btn-github" onclick="loginWithGitHub()">GitHub</a>
+            <a href="#" class="btn btn-facebook" onclick="loginWithFacebook()">Facebook</a>
+            <a href="#" class="btn btn-google" onclick="loginWithGoogle()">Google</a>
+        </div>
+    </div>
+
+    <div id="userSection" style="display: none;">
+        <h2>Welcome!</h2>
+        <div id="userInfo" class="user-info"></div>
+        <button class="btn btn-logout" onclick="logout()">Logout</button>
+    </div>
+
+    <div id="status"></div>
+
+    <h2>Protected API Test</h2>
+    <button class="btn" onclick="testProtectedEndpoint()" style="background-color: #007bff;">Test Protected Endpoint</button>
+    <div id="apiResult"></div>
+
+    <script>
+        const API_BASE = 'http://localhost:8080';
+        
+        // Check for auth token on page load
+        window.onload = function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const token = urlParams.get('token');
+            const error = urlParams.get('error');
+            
+            if (token) {
+                localStorage.setItem('authToken', token);
+                showStatus('Authentication successful!', 'success');
+                loadUserInfo();
+                // Clean URL
+                window.history.replaceState({}, document.title, window.location.pathname);
+            } else if (error) {
+                showStatus('Authentication failed: ' + error, 'error');
+            } else {
+                // Check if already logged in
+                const savedToken = localStorage.getItem('authToken');
+                if (savedToken) {
+                    loadUserInfo();
+                }
+            }
+        };
+
+        function loginWithGitHub() {
+            const state = generateState();
+            localStorage.setItem('oauthState', state);
+            window.location.href = `${API_BASE}/auth/github?state=${state}`;
+        }
+
+        function loginWithFacebook() {
+            const state = generateState();
+            localStorage.setItem('oauthState', state);
+            window.location.href = `${API_BASE}/auth/facebook?state=${state}`;
+        }
+
+        function loginWithGoogle() {
+            showStatus('Google OIDC authentication requires server-side implementation', 'error');
+        }
+
+        function logout() {
+            const token = localStorage.getItem('authToken');
+            
+            if (token) {
+                fetch(`${API_BASE}/auth/logout`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    }
+                })
+                .then(response => {
+                    if (response.ok) {
+                        showStatus('Logged out successfully', 'success');
+                    }
+                })
+                .catch(error => {
+                    console.error('Logout error:', error);
+                })
+                .finally(() => {
+                    localStorage.removeItem('authToken');
+                    localStorage.removeItem('oauthState');
+                    showAuthSection();
+                });
+            } else {
+                localStorage.removeItem('authToken');
+                localStorage.removeItem('oauthState');
+                showAuthSection();
+            }
+        }
+
+        function loadUserInfo() {
+            const token = localStorage.getItem('authToken');
+            
+            if (!token) {
+                showAuthSection();
+                return;
+            }
+
+            fetch(`${API_BASE}/auth/me`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            })
+            .then(response => {
+                if (response.ok) {
+                    return response.json();
+                } else if (response.status === 401) {
+                    localStorage.removeItem('authToken');
+                    showStatus('Session expired. Please log in again.', 'error');
+                    showAuthSection();
+                    throw new Error('Unauthorized');
+                } else {
+                    throw new Error('Failed to load user info');
+                }
+            })
+            .then(user => {
+                showUserSection(user);
+            })
+            .catch(error => {
+                console.error('Error loading user info:', error);
+                if (error.message !== 'Unauthorized') {
+                    showStatus('Error loading user information: ' + error.message, 'error');
+                }
+            });
+        }
+
+        function testProtectedEndpoint() {
+            const token = localStorage.getItem('authToken');
+            
+            if (!token) {
+                showApiResult('Please log in first', 'error');
+                return;
+            }
+
+            fetch(`${API_BASE}/hello/secure`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            })
+            .then(response => {
+                if (response.ok) {
+                    return response.text();
+                } else {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+            })
+            .then(data => {
+                showApiResult('Protected endpoint response: ' + data, 'success');
+            })
+            .catch(error => {
+                showApiResult('Error: ' + error.message, 'error');
+            });
+        }
+
+        function showAuthSection() {
+            document.getElementById('authSection').style.display = 'block';
+            document.getElementById('userSection').style.display = 'none';
+        }
+
+        function showUserSection(user) {
+            document.getElementById('authSection').style.display = 'none';
+            document.getElementById('userSection').style.display = 'block';
+            
+            document.getElementById('userInfo').innerHTML = `
+                <p><strong>Name:</strong> ${user.name}</p>
+                <p><strong>Email:</strong> ${user.email}</p>
+                <p><strong>Provider:</strong> ${user.provider}</p>
+                ${user.avatarUrl ? `<p><img src="${user.avatarUrl}" alt="Avatar" style="width: 50px; height: 50px; border-radius: 50%;"></p>` : ''}
+            `;
+        }
+
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.innerHTML = `<div class="status ${type}">${message}</div>`;
+            setTimeout(() => {
+                statusDiv.innerHTML = '';
+            }, 5000);
+        }
+
+        function showApiResult(message, type) {
+            const resultDiv = document.getElementById('apiResult');
+            resultDiv.innerHTML = `<div class="status ${type}">${message}</div>`;
+        }
+
+        function generateState() {
+            return Math.random().toString(36).substring(2, 15) + 
+                   Math.random().toString(36).substring(2, 15);
+        }
+    </script>
+</body>
+</html>
